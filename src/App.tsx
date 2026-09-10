@@ -13,8 +13,6 @@ import { buildCaptureSessions } from "./services/frameIndex";
 import { resolveFrameUrl } from "./services/manifest";
 
 export default function App() {
-  console.log("TEST 9/10");
-
   const { manifest, loading, error } = useManifest();
 
   const [requestedSessionIndex, setRequestedSessionIndex] = useState(0);
