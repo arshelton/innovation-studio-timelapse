@@ -5,8 +5,34 @@ import { Timeline } from "./components/Timeline";
 import { useManifest } from "./hooks/useManifest";
 import { buildCaptureSessions } from "./services/frameIndex";
 import { resolveFrameUrl } from "./services/manifest";
+import type { PanoramaFrame, TiledPanorama } from "./types";
 
 const TIMELINE_SETTLE_DELAY_MS = 250;
+
+export interface TiledPanoramaSource {
+  id: string;
+  width: number;
+  cols: number;
+  rows: number;
+  baseUrl: string;
+  tileDirectoryUrl: string;
+  fallbackUrl: string;
+}
+
+function createTiledPanoramaSource(
+  frame: PanoramaFrame,
+  panorama: TiledPanorama,
+): TiledPanoramaSource {
+  return {
+    id: frame.id,
+    width: panorama.width,
+    cols: panorama.cols,
+    rows: panorama.rows,
+    baseUrl: resolveFrameUrl(panorama.basePath),
+    tileDirectoryUrl: resolveFrameUrl(panorama.tileDirectory),
+    fallbackUrl: resolveFrameUrl(frame.imagePath),
+  };
+}
 
 export default function App() {
   const { manifest, loading, error } = useManifest();
@@ -14,8 +40,8 @@ export default function App() {
   /*
    * requestedSessionIndex controls the timeline thumb and labels.
    *
-   * displayedSessionIndex controls the panorama that is actually
-   * passed to PanoramaViewer.
+   * displayedSessionIndex controls the panorama supplied to
+   * PanoramaViewer.
    */
   const [requestedSessionIndex, setRequestedSessionIndex] = useState(0);
 
@@ -26,8 +52,8 @@ export default function App() {
   );
 
   /*
-   * The timer delays the expensive panorama change while the user
-   * is continuously moving the timeline.
+   * Timeline movement is allowed to settle before the expensive
+   * panorama change occurs.
    */
   const timelineCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -38,10 +64,8 @@ export default function App() {
   }, [manifest]);
 
   /*
-   * Clamp indexes as derived values rather than synchronizing them
-   * through an effect.
-   *
-   * This avoids synchronous setState calls inside an effect.
+   * Clamp indexes as derived values instead of synchronizing them
+   * with setState inside an effect.
    */
   const clampSessionIndex = useCallback(
     (sessionIndex: number): number => {
@@ -60,8 +84,7 @@ export default function App() {
   const selectedSessionIndex = clampSessionIndex(requestedSessionIndex);
 
   /*
-   * This index changes only after timeline movement settles or an
-   * immediate navigation operation occurs.
+   * This index controls the panorama viewer.
    */
   const activeViewerSessionIndex = clampSessionIndex(displayedSessionIndex);
 
@@ -70,9 +93,8 @@ export default function App() {
   const activeViewerSession = captureSessions[activeViewerSessionIndex] ?? null;
 
   /*
-   * This effect only cleans up the pending timer.
-   *
-   * It does not update React state.
+   * The effect only cleans up the pending timer. It does not call
+   * a state setter.
    */
   useEffect(() => {
     return () => {
@@ -83,9 +105,8 @@ export default function App() {
   }, []);
 
   /*
-   * The available locations are based on the panorama session
-   * currently supplied to the viewer, not an intermediate timeline
-   * position.
+   * Available locations are based on the session currently supplied
+   * to the viewer, not an intermediate timeline position.
    */
   const availableLocationIds = useMemo(() => {
     return new Set<string>(
@@ -94,8 +115,8 @@ export default function App() {
   }, [activeViewerSession]);
 
   /*
-   * Preserve the requested location when it exists in the active
-   * viewer session. Otherwise, select the first available location.
+   * Preserve the requested location when it is available.
+   * Otherwise, select the first available manifest location.
    */
   const activeLocationId = useMemo(() => {
     if (
@@ -117,7 +138,7 @@ export default function App() {
   }, [availableLocationIds, manifest, requestedLocationId]);
 
   /*
-   * This frame controls the actual panorama viewer.
+   * This frame controls the panorama viewer.
    */
   const activeFrame = useMemo(() => {
     if (activeLocationId === null || activeViewerSession === null) {
@@ -127,17 +148,24 @@ export default function App() {
     return activeViewerSession.framesByLocation[activeLocationId] ?? null;
   }, [activeLocationId, activeViewerSession]);
 
-  const activeImageUrl = useMemo(() => {
-    if (!activeFrame) {
+  /*
+   * Construct the tiled source only when the manifest contains
+   * completed tile metadata.
+   *
+   * The object contains a stable frame ID that PanoramaViewer uses
+   * for latest-selection comparisons.
+   */
+  const activePanorama = useMemo(() => {
+    if (!activeFrame || !activeFrame.panorama) {
       return null;
     }
 
-    return resolveFrameUrl(activeFrame.imagePath);
+    return createTiledPanoramaSource(activeFrame, activeFrame.panorama);
   }, [activeFrame]);
 
   /*
    * This frame controls the timeline label. It follows the timeline
-   * immediately, even before its panorama is committed.
+   * immediately while the panorama waits for the settle timer.
    */
   const selectedTimelineFrame = useMemo(() => {
     if (activeLocationId === null || selectedSession === null) {
@@ -153,12 +181,13 @@ export default function App() {
     }
 
     clearTimeout(timelineCommitTimerRef.current);
+
     timelineCommitTimerRef.current = null;
   }, []);
 
   /*
-   * Previous, Next, and other discrete selection actions use this
-   * function. They update the timeline and panorama immediately.
+   * Discrete actions such as Previous and Next update both the
+   * timeline and panorama immediately.
    */
   const selectSessionImmediately = useCallback(
     (sessionIndex: number): void => {
@@ -167,27 +196,27 @@ export default function App() {
       clearTimelineCommitTimer();
 
       setRequestedSessionIndex(nextIndex);
+
       setDisplayedSessionIndex(nextIndex);
     },
     [clampSessionIndex, clearTimelineCommitTimer],
   );
 
   /*
-   * Timeline movement updates the thumb immediately but delays the
-   * full panorama change.
-   *
-   * Each new timeline event replaces the previous timer. Therefore,
-   * only the final settled timeline position reaches PanoramaViewer.
+   * Timeline scrubbing updates the thumb and labels immediately,
+   * but delays the panorama change until movement settles.
    */
   const selectTimelineSession = useCallback(
     (sessionIndex: number): void => {
       const nextIndex = clampSessionIndex(sessionIndex);
 
       setRequestedSessionIndex(nextIndex);
+
       clearTimelineCommitTimer();
 
       timelineCommitTimerRef.current = setTimeout(() => {
         setDisplayedSessionIndex(nextIndex);
+
         timelineCommitTimerRef.current = null;
       }, TIMELINE_SETTLE_DELAY_MS);
     },
@@ -202,17 +231,17 @@ export default function App() {
   );
 
   /*
-   * Selecting a location is a discrete action.
+   * Location selection is a discrete action.
    *
-   * If the user has moved the timeline but the delayed commit has
-   * not occurred yet, selecting a location commits that timeline
-   * position immediately.
+   * If a delayed timeline commit is pending, selecting a location
+   * commits the visible timeline position immediately.
    */
   const selectLocation = useCallback(
     (locationId: string): void => {
       clearTimelineCommitTimer();
 
       setDisplayedSessionIndex(selectedSessionIndex);
+
       setRequestedLocationId(locationId);
     },
     [clearTimelineCommitTimer, selectedSessionIndex],
@@ -234,6 +263,7 @@ export default function App() {
       >
         <div>
           <h1>Unable to load panorama data</h1>
+
           <p>{error.message}</p>
         </div>
       </main>
@@ -250,6 +280,7 @@ export default function App() {
       <main className="centered-message">
         <div>
           <h1>No panoramas found</h1>
+
           <p>Add the images and regenerate the panorama manifest.</p>
         </div>
       </main>
@@ -261,11 +292,13 @@ export default function App() {
       <div className="application-shell">
         <header className="application-header">
           <div>
+            <p className="header-eyebrow">Research image viewer</p>
+
             <h1>360 Timelapse Viewer</h1>
 
             <p className="header-description">
               {manifest.frames.length} images across {captureSessions.length}{" "}
-              days and {manifest.locations.length} locations
+              capture sessions and {manifest.locations.length} locations
             </p>
           </div>
         </header>
@@ -277,14 +310,18 @@ export default function App() {
           onChange={selectLocation}
         />
 
-        {activeImageUrl !== null ? (
-          <PanoramaViewer imageUrl={activeImageUrl} />
+        {activePanorama !== null ? (
+          <PanoramaViewer panorama={activePanorama} />
         ) : (
           <section className="viewer-shell">
             <div className="no-frame-message">
               <div>
-                <h2>No panorama available</h2>
-                <p>Select an available location.</p>
+                <h2>Tiled panorama unavailable</h2>
+
+                <p>
+                  Generate and upload the tiled assets for this capture, then
+                  regenerate the manifest.
+                </p>
               </div>
             </div>
           </section>
