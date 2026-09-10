@@ -71,6 +71,8 @@ export function resolveFrameUrl(imagePath: string): string {
     throw new Error("VITE_IMAGE_BASE_URL has not been configured.");
   }
 
+  console.log(configuredBaseUrl);
+
   const baseUrl = configuredBaseUrl.replace(/\/_$/, "");
   const normalizedPath = imagePath.replace(/^\/+/, "");
 
