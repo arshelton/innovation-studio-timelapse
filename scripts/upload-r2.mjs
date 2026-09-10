@@ -1,9 +1,6 @@
-import { access, readdir } from "node:fs/promises";
-
+import { access, readdir, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
-
 import path from "node:path";
-
 import { fileURLToPath } from "node:url";
 
 const currentFilePath = fileURLToPath(import.meta.url);
@@ -12,7 +9,13 @@ const currentDirectory = path.dirname(currentFilePath);
 
 const projectRoot = path.resolve(currentDirectory, "..");
 
-const sourceRoot = path.join(projectRoot, "source-panoramas");
+const tileVersion = "tiles-v1";
+
+const generatedRoot = path.join(
+  projectRoot,
+  "generated-panoramas",
+  tileVersion,
+);
 
 const wranglerPath = path.join(
   projectRoot,
@@ -22,32 +25,64 @@ const wranglerPath = path.join(
   "wrangler.js",
 );
 
-const supportedImagePattern = /\.(jpe?g|png|webp)$/i;
+const expectedColumns = 16;
+const expectedRows = 8;
+const expectedTileCount = expectedColumns * expectedRows;
+
+const cacheControl = "public, max-age=31536000, immutable";
 
 const bucketName = process.argv[2];
+const commandArguments = process.argv.slice(3);
+
+const requestedLocation = getArgumentValue("--location");
+
+const requestedFile = getArgumentValue("--file");
+
+function getArgumentValue(argumentName) {
+  const argumentIndex = commandArguments.indexOf(argumentName);
+
+  if (argumentIndex === -1) {
+    return null;
+  }
+
+  const value = commandArguments[argumentIndex + 1];
+
+  if (!value || value.startsWith("--")) {
+    throw new Error(`A value is required after ${argumentName}.`);
+  }
+
+  return value;
+}
 
 if (!bucketName) {
   throw new Error(
     [
       "An R2 bucket name is required.",
       "",
-      "Example:",
+      "Upload every generated panorama:",
       "npm run upload:r2 -- panorama-viewer-images",
+      "",
+      "Upload one panorama:",
+      [
+        "npm run upload:r2 --",
+        "panorama-viewer-images",
+        "--location main",
+        "--file IMG_20260203_170733_00_005.jpg",
+      ].join(" "),
     ].join("\n"),
   );
 }
 
 async function verifyRequiredPaths() {
   try {
-    await access(sourceRoot);
+    await access(generatedRoot);
   } catch {
     throw new Error(
       [
-        "The source panorama directory was not found:",
-        sourceRoot,
+        "The generated panorama directory was not found:",
+        generatedRoot,
         "",
-        "Create source-panoramas and add one",
-        "subdirectory for each location.",
+        "Generate tiled panoramas before uploading them.",
       ].join("\n"),
     );
   }
@@ -69,12 +104,6 @@ async function verifyRequiredPaths() {
 
 function runWrangler(argumentsList) {
   return new Promise((resolve, reject) => {
-    /*
-     * process.execPath is the absolute path to the
-     * currently running Node executable.
-     *
-     * This avoids spawning npx.cmd on Windows.
-     */
     const child = spawn(process.execPath, [wranglerPath, ...argumentsList], {
       cwd: projectRoot,
       stdio: "inherit",
@@ -106,86 +135,247 @@ function runWrangler(argumentsList) {
   });
 }
 
-async function uploadImages() {
-  await verifyRequiredPaths();
+async function verifyFile(filePath) {
+  try {
+    const fileStats = await stat(filePath);
 
-  const rootEntries = await readdir(sourceRoot, {
-    withFileTypes: true,
-  });
+    return fileStats.isFile() && fileStats.size > 0;
+  } catch {
+    return false;
+  }
+}
 
-  const locationDirectories = rootEntries.filter((entry) => {
-    return entry.isDirectory() && !entry.name.startsWith(".");
-  });
+async function getPanoramaFiles(panoramaDirectory) {
+  const basePath = path.join(panoramaDirectory, "base.jpg");
 
-  if (locationDirectories.length === 0) {
+  if (!(await verifyFile(basePath))) {
+    throw new Error(`Missing or empty base panorama: ${basePath}`);
+  }
+
+  const tilesDirectory = path.join(panoramaDirectory, "tiles");
+
+  let tileEntries;
+
+  try {
+    tileEntries = await readdir(tilesDirectory, {
+      withFileTypes: true,
+    });
+  } catch {
+    throw new Error(`Tile directory was not found: ${tilesDirectory}`);
+  }
+
+  const tileNames = tileEntries
+    .filter((entry) => {
+      return entry.isFile() && /^\d+_\d+\.jpg$/i.test(entry.name);
+    })
+    .map((entry) => entry.name);
+
+  if (tileNames.length !== expectedTileCount) {
     throw new Error(
       [
-        "No location directories were found under:",
-        sourceRoot,
-        "",
-        "Expected a structure such as:",
-        "source-panoramas/location-1/image.jpg",
+        "The generated panorama has an incorrect tile count.",
+        `Directory: ${tilesDirectory}`,
+        `Expected: ${expectedTileCount}`,
+        `Found: ${tileNames.length}`,
       ].join("\n"),
     );
   }
 
-  let uploadedCount = 0;
-  let skippedCount = 0;
+  const tileFiles = [];
 
-  for (const locationDirectory of locationDirectories) {
-    const locationId = locationDirectory.name;
+  for (let row = 0; row < expectedRows; row += 1) {
+    for (let column = 0; column < expectedColumns; column += 1) {
+      const tileName = `${column}_${row}.jpg`;
 
-    const locationPath = path.join(sourceRoot, locationId);
+      const tilePath = path.join(tilesDirectory, tileName);
 
-    const imageEntries = await readdir(locationPath, {
-      withFileTypes: true,
-    });
-
-    for (const imageEntry of imageEntries) {
-      if (
-        !imageEntry.isFile() ||
-        !supportedImagePattern.test(imageEntry.name)
-      ) {
-        skippedCount += 1;
-        continue;
+      if (!(await verifyFile(tilePath))) {
+        throw new Error(`Missing or empty tile: ${tilePath}`);
       }
 
-      const localFilePath = path.join(locationPath, imageEntry.name);
-
-      /*
-       * R2 object keys use forward slashes even when
-       * this script is running on Windows.
-       */
-      const objectKey = [locationId, imageEntry.name].join("/");
-
-      console.log("");
-      console.log(`Uploading ${objectKey}`);
-
-      await runWrangler([
-        "r2",
-        "object",
-        "put",
-        `${bucketName}/${objectKey}`,
-        "--file",
-        localFilePath,
-        "--remote",
-        "--jurisdiction",
-        "us",
-      ]);
-
-      uploadedCount += 1;
+      tileFiles.push({
+        localPath: tilePath,
+        relativePath: ["tiles", tileName].join("/"),
+      });
     }
   }
 
-  console.log("");
-  console.log(`Uploaded ${uploadedCount} images.`);
-
-  if (skippedCount > 0) {
-    console.log(`Skipped ${skippedCount} non-image entries.`);
-  }
+  return [
+    {
+      localPath: basePath,
+      relativePath: "base.jpg",
+    },
+    ...tileFiles,
+  ];
 }
 
-uploadImages().catch((reason) => {
+async function discoverPanoramas() {
+  const rootEntries = await readdir(generatedRoot, {
+    withFileTypes: true,
+  });
+
+  const locationEntries = rootEntries
+    .filter((entry) => {
+      return entry.isDirectory() && !entry.name.startsWith(".");
+    })
+    .sort((firstEntry, secondEntry) => {
+      return firstEntry.name.localeCompare(secondEntry.name);
+    });
+
+  const panoramas = [];
+
+  for (const locationEntry of locationEntries) {
+    const locationId = locationEntry.name;
+
+    if (requestedLocation !== null && requestedLocation !== locationId) {
+      continue;
+    }
+
+    const locationDirectory = path.join(generatedRoot, locationId);
+
+    const panoramaEntries = await readdir(locationDirectory, {
+      withFileTypes: true,
+    });
+
+    const panoramaDirectories = panoramaEntries
+      .filter((entry) => {
+        return (
+          entry.isDirectory() &&
+          !entry.name.startsWith(".") &&
+          !entry.name.endsWith(".temporary")
+        );
+      })
+      .sort((firstEntry, secondEntry) => {
+        return firstEntry.name.localeCompare(secondEntry.name);
+      });
+
+    for (const panoramaEntry of panoramaDirectories) {
+      const panoramaName = panoramaEntry.name;
+
+      /*
+       * The --file argument may include the original extension,
+       * while generated panorama directories use the filename stem.
+       */
+      const requestedPanoramaName =
+        requestedFile === null ? null : path.parse(requestedFile).name;
+
+      if (
+        requestedPanoramaName !== null &&
+        requestedPanoramaName !== panoramaName
+      ) {
+        continue;
+      }
+
+      panoramas.push({
+        locationId,
+        panoramaName,
+        directory: path.join(locationDirectory, panoramaName),
+      });
+    }
+  }
+
+  return panoramas;
+}
+
+async function uploadFile(localPath, objectKey) {
+  console.log(`Uploading ${objectKey}`);
+
+  await runWrangler([
+    "r2",
+    "object",
+    "put",
+    `${bucketName}/${objectKey}`,
+    "--file",
+    localPath,
+    "--content-type",
+    "image/jpeg",
+    "--cache-control",
+    cacheControl,
+    "--remote",
+    "--jurisdiction",
+    "us",
+  ]);
+}
+
+async function uploadPanorama(panorama) {
+  console.log("");
+  console.log(
+    ["Preparing", `${panorama.locationId}/`, panorama.panoramaName].join(""),
+  );
+
+  const files = await getPanoramaFiles(panorama.directory);
+
+  let uploadedCount = 0;
+
+  for (const file of files) {
+    const objectKey = [
+      tileVersion,
+      panorama.locationId,
+      panorama.panoramaName,
+      file.relativePath,
+    ].join("/");
+
+    await uploadFile(file.localPath, objectKey);
+
+    uploadedCount += 1;
+  }
+
+  console.log(
+    [
+      "Completed",
+      `${panorama.locationId}/`,
+      `${panorama.panoramaName}:`,
+      `${uploadedCount} files uploaded.`,
+    ].join(" "),
+  );
+
+  return uploadedCount;
+}
+
+async function uploadGeneratedPanoramas() {
+  await verifyRequiredPaths();
+
+  const panoramas = await discoverPanoramas();
+
+  if (panoramas.length === 0) {
+    throw new Error(
+      [
+        "No matching generated panoramas were found.",
+        "",
+        requestedLocation ? `Location filter: ${requestedLocation}` : "",
+        requestedFile ? `File filter: ${requestedFile}` : "",
+        "",
+        `Generated root: ${generatedRoot}`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+
+  console.log("");
+  console.log(`Found ${panoramas.length} panorama(s) to upload.`);
+
+  console.log(`Destination bucket: ${bucketName}`);
+
+  let totalUploadedCount = 0;
+  let completedPanoramaCount = 0;
+
+  for (const panorama of panoramas) {
+    const uploadedCount = await uploadPanorama(panorama);
+
+    totalUploadedCount += uploadedCount;
+    completedPanoramaCount += 1;
+  }
+
+  console.log("");
+  console.log("R2 upload complete.");
+
+  console.log(`Panoramas uploaded: ${completedPanoramaCount}`);
+
+  console.log(`Files uploaded: ${totalUploadedCount}`);
+}
+
+uploadGeneratedPanoramas().catch((reason) => {
   console.error("");
   console.error("R2 upload failed.");
 
