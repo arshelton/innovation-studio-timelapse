@@ -66,7 +66,6 @@ export async function loadManifest(
 
 export function resolveFrameUrl(imagePath: string): string {
   const configuredBaseUrl = import.meta.env.VITE_IMAGE_BASE_URL;
-  console.log(configuredBaseUrl);
 
   if (!configuredBaseUrl) {
     throw new Error("VITE_IMAGE_BASE_URL has not been configured.");
