@@ -65,6 +65,11 @@ export async function loadManifest(
 }
 
 export function resolveFrameUrl(imagePath: string): string {
+  console.log("ENV CHECK", {
+    mode: import.meta.env.MODE,
+    imageBase: import.meta.env.VITE_IMAGE_BASE_URL,
+  });
+
   const configuredBaseUrl = import.meta.env.VITE_IMAGE_BASE_URL;
 
   if (!configuredBaseUrl) {

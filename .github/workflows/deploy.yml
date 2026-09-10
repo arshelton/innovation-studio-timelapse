@@ -24,12 +24,6 @@ jobs:
 
       - run: npm ci
 
-      - name: Verify environment
-        run: |
-          echo "VITE_IMAGE_BASE_URL=${VITE_IMAGE_BASE_URL}"
-        env:
-          VITE_IMAGE_BASE_URL: ${{ vars.VITE_IMAGE_BASE_URL }}
-
       - name: Build application
         run: npm run build
         env:
