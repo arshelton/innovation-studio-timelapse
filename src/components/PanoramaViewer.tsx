@@ -7,18 +7,11 @@ import type { ViewerPose } from "../types";
 interface PanoramaViewerProps {
   imageUrl: string;
 
-  /*
-   * Neighboring panoramas that should be placed into
-   * Photo Sphere Viewer's own loading cache.
-   */
-  preloadImageUrls: string[];
-
   onPoseChange?: (pose: ViewerPose) => void;
 }
 
 export function PanoramaViewer({
   imageUrl,
-  preloadImageUrls,
   onPoseChange,
 }: PanoramaViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -48,11 +41,6 @@ export function PanoramaViewer({
    * component after a newer selection.
    */
   const requestNumberRef = useRef(0);
-
-  /*
-   * Avoid repeatedly preloading the same URL.
-   */
-  const preloadedUrlsRef = useRef<Set<string>>(new Set());
 
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -85,9 +73,6 @@ export function PanoramaViewer({
     });
 
     viewerRef.current = viewer;
-
-    preloadedUrlsRef.current.add(currentImageUrlRef.current);
-
     const positionListener: EventListenerObject = {
       handleEvent(event: Event): void {
         if (
@@ -173,47 +158,6 @@ export function PanoramaViewer({
   }, []);
 
   /*
-   * Preload neighboring images through Photo Sphere
-   * Viewer itself.
-   */
-  useEffect(() => {
-    const viewer = viewerRef.current;
-
-    if (!viewer) {
-      return;
-    }
-
-    for (const preloadUrl of preloadImageUrls) {
-      if (
-        preloadUrl === currentImageUrlRef.current ||
-        preloadedUrlsRef.current.has(preloadUrl)
-      ) {
-        continue;
-      }
-
-      /*
-       * Mark it before starting so another render does
-       * not begin the same preload concurrently.
-       */
-      preloadedUrlsRef.current.add(preloadUrl);
-
-      viewer.textureLoader
-        .preloadPanorama(preloadUrl)
-        .catch((reason: unknown) => {
-          /*
-           * Permit a retry if preloading failed.
-           */
-          preloadedUrlsRef.current.delete(preloadUrl);
-
-          console.warn("Panorama preload failed.", {
-            preloadUrl,
-            reason,
-          });
-        });
-    }
-  }, [preloadImageUrls]);
-
-  /*
    * Install the newly selected panorama while preserving
    * the user's exact yaw, pitch, and zoom.
    */
@@ -243,7 +187,6 @@ export function PanoramaViewer({
     };
 
     poseRef.current = preservedPose;
-
     panoramaChangingRef.current = true;
 
     setPanoramaLoading(true);
@@ -275,9 +218,6 @@ export function PanoramaViewer({
         }
 
         currentImageUrlRef.current = imageUrl;
-
-        preloadedUrlsRef.current.add(imageUrl);
-
         panoramaChangingRef.current = false;
 
         setPanoramaLoading(false);

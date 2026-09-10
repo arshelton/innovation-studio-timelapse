@@ -96,42 +96,6 @@ export default function App() {
     return resolveFrameUrl(activeFrame.imagePath);
   }, [activeFrame]);
 
-  /*
-   * Preload the next three and previous two panoramas for
-   * the current location.
-   *
-   * Biasing preloading forward improves Next-button
-   * navigation, which is generally the common direction.
-   */
-  const preloadImageUrls = useMemo(() => {
-    if (activeLocationId === null) {
-      return [];
-    }
-
-    const offsets = [-2, -1, 1, 2, 3];
-
-    const urls: string[] = [];
-
-    for (const offset of offsets) {
-      const neighboringSession = captureSessions[selectedSessionIndex + offset];
-
-      if (!neighboringSession) {
-        continue;
-      }
-
-      const neighboringFrame =
-        neighboringSession.framesByLocation[activeLocationId];
-
-      if (!neighboringFrame) {
-        continue;
-      }
-
-      urls.push(resolveFrameUrl(neighboringFrame.imagePath));
-    }
-
-    return urls;
-  }, [activeLocationId, captureSessions, selectedSessionIndex]);
-
   function selectSession(sessionIndex: number): void {
     const maximumIndex = captureSessions.length - 1;
 
@@ -201,10 +165,7 @@ export default function App() {
         />
 
         {activeImageUrl !== null ? (
-          <PanoramaViewer
-            imageUrl={activeImageUrl}
-            preloadImageUrls={preloadImageUrls}
-          />
+          <PanoramaViewer imageUrl={activeImageUrl} />
         ) : (
           <section className="viewer-shell">
             <div className="no-frame-message">
