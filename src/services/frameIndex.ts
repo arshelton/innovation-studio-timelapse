@@ -1,68 +1,97 @@
 import type { PanoramaFrame } from "../types";
 
-export type FrameIndex = Record<string, PanoramaFrame[]>;
+export interface CaptureSession {
+  /*
+   * Used for displaying and sorting the session.
+   *
+   * This is the timestamp of the earliest image in the
+   * session, not necessarily the timestamp of every
+   * image in the session.
+   */
+  timestamp: number;
 
-export interface NearestFrameResult {
-  frame: PanoramaFrame;
-  index: number;
-  distance: number;
+  /*
+   * ISO-style calendar key, such as 2026-02-11.
+   */
+  dateKey: string;
+
+  /*
+   * One frame per location for this capture session.
+   */
+  framesByLocation: Record<string, PanoramaFrame>;
 }
 
-export function buildFrameIndex(frames: PanoramaFrame[]): FrameIndex {
-  const index: FrameIndex = {};
-
-  for (const frame of frames) {
-    index[frame.locationId] ??= [];
-    index[frame.locationId].push(frame);
-  }
-
-  for (const locationFrames of Object.values(index)) {
-    locationFrames.sort((left, right) => left.timestamp - right.timestamp);
-  }
-
-  return index;
+/*
+ * The manifest parser currently interprets the camera
+ * filename as UTC. Therefore, use the UTC date here too.
+ *
+ * This prevents session grouping from changing according
+ * to the timezone of the computer viewing the site.
+ */
+function createDateKey(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 10);
 }
 
-export function findNearestFrame(
+/*
+ * Group images taken on the same calendar date into one
+ * capture session.
+ *
+ * This matches the acquisition process:
+ *
+ * - sessions are separated by days
+ * - location images within a session are separated by
+ *   minutes
+ */
+export function buildCaptureSessions(
   frames: PanoramaFrame[],
-  timestamp: number,
-): NearestFrameResult | null {
-  if (frames.length === 0) {
-    return null;
-  }
+): CaptureSession[] {
+  const sessionsByDate = new Map<string, CaptureSession>();
 
-  let low = 0;
-  let high = frames.length - 1;
+  const sortedFrames = [...frames].sort((left, right) => {
+    return left.timestamp - right.timestamp;
+  });
 
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const middleTimestamp = frames[middle].timestamp;
+  for (const frame of sortedFrames) {
+    const dateKey = createDateKey(frame.timestamp);
 
-    if (middleTimestamp < timestamp) {
-      low = middle + 1;
-    } else if (middleTimestamp > timestamp) {
-      high = middle - 1;
-    } else {
-      return {
-        frame: frames[middle],
-        index: middle,
-        distance: 0,
-      };
+    const existingSession = sessionsByDate.get(dateKey);
+
+    if (existingSession) {
+      if (existingSession.framesByLocation[frame.locationId]) {
+        console.warn(
+          "Multiple frames found for one location in one capture session.",
+          {
+            dateKey,
+            locationId: frame.locationId,
+            retainedFrame: existingSession.framesByLocation[frame.locationId],
+            ignoredFrame: frame,
+          },
+        );
+
+        continue;
+      }
+
+      existingSession.framesByLocation[frame.locationId] = frame;
+
+      existingSession.timestamp = Math.min(
+        existingSession.timestamp,
+        frame.timestamp,
+      );
+
+      continue;
     }
+
+    sessionsByDate.set(dateKey, {
+      dateKey,
+      timestamp: frame.timestamp,
+
+      framesByLocation: {
+        [frame.locationId]: frame,
+      },
+    });
   }
 
-  const beforeIndex = Math.max(0, high);
-  const afterIndex = Math.min(frames.length - 1, low);
-
-  const beforeDistance = Math.abs(frames[beforeIndex].timestamp - timestamp);
-  const afterDistance = Math.abs(frames[afterIndex].timestamp - timestamp);
-
-  const nearestIndex =
-    beforeDistance <= afterDistance ? beforeIndex : afterIndex;
-
-  return {
-    frame: frames[nearestIndex],
-    index: nearestIndex,
-    distance: Math.abs(frames[nearestIndex].timestamp - timestamp),
-  };
+  return Array.from(sessionsByDate.values()).sort((left, right) => {
+    return left.timestamp - right.timestamp;
+  });
 }

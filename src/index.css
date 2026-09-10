@@ -311,3 +311,38 @@ input:focus-visible {
     gap: 2px;
   }
 }
+
+.timeline-position {
+  margin-top: 8px;
+
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.secondary-button:disabled:hover {
+  background: var(--color-surface);
+}
+
+.viewer-loading-status {
+  position: absolute;
+  z-index: 10;
+  top: 14px;
+  right: 14px;
+
+  padding: 8px 12px;
+
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-medium);
+
+  color: var(--color-text);
+  background: rgba(2, 6, 23, 0.78);
+
+  font-size: 0.8rem;
+  backdrop-filter: blur(8px);
+}

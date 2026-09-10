@@ -1,33 +1,36 @@
-interface Props {
-  minimumTime: number;
-  maximumTime: number;
-  selectedTime: number;
-  selectedTimeLabel: string;
+interface TimelineProps {
+  selectedIndex: number;
+  totalSessions: number;
+
+  selectedDateLabel: string;
   frameLabel: string;
-  onChange: (timestamp: number) => void;
-  onPreviousFrame: () => void;
-  onNextFrame: () => void;
+
+  onChange: (sessionIndex: number) => void;
+
+  onPrevious: () => void;
+  onNext: () => void;
 }
 
 export function Timeline({
-  minimumTime,
-  maximumTime,
-  selectedTime,
-  selectedTimeLabel,
+  selectedIndex,
+  totalSessions,
+  selectedDateLabel,
   frameLabel,
   onChange,
-  onPreviousFrame,
-  onNextFrame,
-}: Props) {
+  onPrevious,
+  onNext,
+}: TimelineProps) {
+  const previousDisabled = selectedIndex <= 0;
+
+  const nextDisabled = selectedIndex >= totalSessions - 1;
+
   return (
-    <section className="timeline-panel" aria-label="Panorama timeline">
+    <section className="timeline-panel" aria-label="Capture timeline">
       <div className="timeline-header">
         <div>
-          <p className="timeline-eyebrow">Selected time</p>
+          <p className="timeline-eyebrow">Capture session</p>
 
-          <time dateTime={new Date(selectedTime).toISOString()}>
-            {selectedTimeLabel}
-          </time>
+          <span>{selectedDateLabel}</span>
         </div>
 
         <span className="frame-label">{frameLabel}</span>
@@ -37,7 +40,8 @@ export function Timeline({
         <button
           type="button"
           className="secondary-button"
-          onClick={onPreviousFrame}
+          disabled={previousDisabled}
+          onClick={onPrevious}
         >
           Previous
         </button>
@@ -45,11 +49,11 @@ export function Timeline({
         <input
           type="range"
           className="timeline-input"
-          aria-label="Selected panorama time"
-          min={minimumTime}
-          max={maximumTime}
-          step={1000}
-          value={selectedTime}
+          aria-label="Selected capture session"
+          min={0}
+          max={Math.max(0, totalSessions - 1)}
+          step={1}
+          value={selectedIndex}
           onChange={(event) => {
             onChange(Number(event.target.value));
           }}
@@ -58,20 +62,15 @@ export function Timeline({
         <button
           type="button"
           className="secondary-button"
-          onClick={onNextFrame}
+          disabled={nextDisabled}
+          onClick={onNext}
         >
           Next
         </button>
       </div>
 
-      <div className="timeline-boundaries">
-        <time dateTime={new Date(minimumTime).toISOString()}>
-          {new Date(minimumTime).toLocaleString()}
-        </time>
-
-        <time dateTime={new Date(maximumTime).toISOString()}>
-          {new Date(maximumTime).toLocaleString()}
-        </time>
+      <div className="timeline-position">
+        Session {selectedIndex + 1} of {totalSessions}
       </div>
     </section>
   );
