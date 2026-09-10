@@ -28,7 +28,7 @@ export function Timeline({
     <section className="timeline-panel" aria-label="Capture timeline">
       <div className="timeline-header">
         <div>
-          <p className="timeline-eyebrow">Capture session</p>
+          <p className="timeline-eyebrow">Captured</p>
 
           <span>{selectedDateLabel}</span>
         </div>
@@ -70,7 +70,7 @@ export function Timeline({
       </div>
 
       <div className="timeline-position">
-        Session {selectedIndex + 1} of {totalSessions}
+        Day {selectedIndex + 1} of {totalSessions}
       </div>
     </section>
   );
