@@ -10,11 +10,20 @@ export interface PanoramaManifest {
   frames: PanoramaFrame[];
 }
 
+export interface TiledPanorama {
+  width: number;
+  cols: number;
+  rows: number;
+  basePath: string;
+  tileDirectory: string;
+}
+
 export interface PanoramaFrame {
   id: string;
   timestamp: number;
   locationId: string;
   imagePath: string;
+  panorama?: TiledPanorama;
 }
 
 export interface Location {
