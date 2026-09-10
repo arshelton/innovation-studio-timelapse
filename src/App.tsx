@@ -21,6 +21,8 @@ export default function App() {
     null,
   );
 
+  console.log("TEST 9/10");
+
   /*
    * Build one timeline position per capture day.
    */
