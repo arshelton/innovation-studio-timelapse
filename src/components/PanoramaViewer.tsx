@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { events, Viewer } from "@photo-sphere-viewer/core";
 import type { ViewerPose } from "../types";
 
@@ -29,15 +29,18 @@ export function PanoramaViewer({
   const viewerRef = useRef<Viewer | null>(null);
 
   /*
-   * This contains the panorama that was most recently installed
-   * successfully.
+   * The panorama most recently installed successfully.
    */
   const currentImageUrlRef = useRef(imageUrl);
 
   /*
-   * Keep the latest callback available to the long-lived viewer
-   * event listeners without recreating the viewer.
+   * The panorama most recently requested by React.
+   *
+   * Rapid navigation updates this value without starting
+   * overlapping setPanorama operations.
    */
+  const desiredImageUrlRef = useRef(imageUrl);
+
   const onPoseChangeRef = useRef(onPoseChange);
 
   const poseRef = useRef<ViewerPose>({
@@ -47,24 +50,18 @@ export function PanoramaViewer({
   });
 
   /*
-   * Programmatic position and zoom events can occur while a new
-   * panorama is being installed.
-   *
-   * Those events should not overwrite the user's saved pose.
+   * Only one setPanorama operation may run at a time.
+   */
+  const panoramaLoadRunningRef = useRef(false);
+
+  /*
+   * Programmatic position and zoom events can occur while changing
+   * panoramas. Those events should not overwrite the user's pose.
    */
   const panoramaChangingRef = useRef(false);
 
   /*
-   * Every requested panorama receives a unique number.
-   *
-   * Promise completions from older requests are ignored so they
-   * cannot change loading or error state after a newer request.
-   */
-  const requestNumberRef = useRef(0);
-
-  /*
-   * Prevent asynchronous viewer work from attempting state updates
-   * after the component has unmounted.
+   * Prevent asynchronous work from updating state after unmount.
    */
   const mountedRef = useRef(false);
 
@@ -77,9 +74,130 @@ export function PanoramaViewer({
   }, [onPoseChange]);
 
   /*
-   * Create one long-lived Photo Sphere Viewer instance.
+   * Process panorama changes sequentially.
    *
-   * Later image changes are handled by the imageUrl effect below.
+   * If several selections occur while one panorama is loading,
+   * intermediate selections are skipped and only the newest desired
+   * panorama is loaded next.
+   */
+  const processDesiredPanorama = useCallback(
+    async (viewer: Viewer): Promise<void> => {
+      if (panoramaLoadRunningRef.current) {
+        return;
+      }
+
+      panoramaLoadRunningRef.current = true;
+      panoramaChangingRef.current = true;
+
+      if (mountedRef.current) {
+        setPanoramaLoading(true);
+        setLoadError(null);
+      }
+
+      try {
+        while (
+          mountedRef.current &&
+          currentImageUrlRef.current !== desiredImageUrlRef.current
+        ) {
+          const requestedUrl = desiredImageUrlRef.current;
+
+          const startedAt = performance.now();
+
+          const currentPosition = viewer.getPosition();
+
+          const preservedPose: ViewerPose = {
+            yaw: currentPosition.yaw,
+            pitch: currentPosition.pitch,
+            zoom: viewer.getZoomLevel(),
+          };
+
+          poseRef.current = preservedPose;
+
+          console.debug("Panorama change started.", {
+            requestedUrl,
+          });
+
+          try {
+            await viewer.setPanorama(requestedUrl, {
+              transition: false,
+              position: {
+                yaw: preservedPose.yaw,
+                pitch: preservedPose.pitch,
+              },
+              zoom: preservedPose.zoom,
+              showLoader: false,
+            });
+
+            if (!mountedRef.current) {
+              return;
+            }
+
+            /*
+             * This panorama completed successfully. If the user has
+             * since selected another panorama, the loop continues
+             * directly to the newest desired URL.
+             */
+            currentImageUrlRef.current = requestedUrl;
+
+            console.debug("Panorama change completed.", {
+              requestedUrl,
+              durationMs: Math.round(performance.now() - startedAt),
+              superseded: requestedUrl !== desiredImageUrlRef.current,
+            });
+          } catch (reason: unknown) {
+            if (!mountedRef.current) {
+              return;
+            }
+
+            const wasSuperseded = requestedUrl !== desiredImageUrlRef.current;
+
+            if (wasSuperseded) {
+              /*
+               * A newer selection replaced this one. The failed
+               * operation must not display an error or stop the
+               * loading indicator.
+               */
+              console.debug("Superseded panorama request ended.", {
+                requestedUrl,
+                desiredUrl: desiredImageUrlRef.current,
+                durationMs: Math.round(performance.now() - startedAt),
+                reason,
+              });
+
+              continue;
+            }
+
+            /*
+             * The panorama that is still desired genuinely failed.
+             */
+            console.error("Current panorama failed to load.", {
+              requestedUrl,
+              durationMs: Math.round(performance.now() - startedAt),
+              reason,
+            });
+
+            setLoadError(getLoadErrorMessage(reason, requestedUrl));
+
+            /*
+             * Stop instead of continuously retrying the same URL.
+             */
+            break;
+          }
+        }
+      } finally {
+        panoramaLoadRunningRef.current = false;
+        panoramaChangingRef.current = false;
+
+        if (mountedRef.current) {
+          setPanoramaLoading(false);
+        }
+      }
+    },
+    [],
+  );
+
+  /*
+   * Create one long-lived Photo Sphere Viewer instance.
    */
   useEffect(() => {
     const container = containerRef.current;
@@ -169,11 +287,7 @@ export function PanoramaViewer({
 
     return () => {
       mountedRef.current = false;
-
-      /*
-       * Invalidate any pending setPanorama completion.
-       */
-      requestNumberRef.current += 1;
+      viewerRef.current = null;
 
       viewer.removeEventListener(
         events.PositionUpdatedEvent.type,
@@ -182,147 +296,30 @@ export function PanoramaViewer({
 
       viewer.removeEventListener(events.ZoomUpdatedEvent.type, zoomListener);
 
-      /*
-       * ReadyEvent was registered with once: true. Removing it is
-       * still useful if unmount occurs before the initial panorama
-       * becomes ready.
-       */
       viewer.removeEventListener(events.ReadyEvent.type, readyListener);
 
       viewer.destroy();
-
-      if (viewerRef.current === viewer) {
-        viewerRef.current = null;
-      }
     };
   }, []);
 
   /*
-   * Install the selected panorama while preserving the viewer's
-   * current yaw, pitch, and zoom.
+   * Record the latest requested URL.
+   *
+   * processDesiredPanorama starts a load only when another load is
+   * not already running. Otherwise, the running processor picks up
+   * this URL when its current operation finishes.
    */
   useEffect(() => {
+    desiredImageUrlRef.current = imageUrl;
+
     const viewer = viewerRef.current;
 
     if (!viewer) {
       return;
     }
 
-    if (currentImageUrlRef.current === imageUrl) {
-      return;
-    }
-
-    const requestNumber = ++requestNumberRef.current;
-
-    const startedAt = performance.now();
-
-    /*
-     * Read the authoritative pose directly from the viewer
-     * immediately before changing the panorama.
-     */
-    const currentPosition = viewer.getPosition();
-
-    const preservedPose: ViewerPose = {
-      yaw: currentPosition.yaw,
-      pitch: currentPosition.pitch,
-      zoom: viewer.getZoomLevel(),
-    };
-
-    poseRef.current = preservedPose;
-    panoramaChangingRef.current = true;
-
-    setPanoramaLoading(true);
-    setLoadError(null);
-
-    console.debug("Panorama change started.", {
-      imageUrl,
-      requestNumber,
-    });
-
-    void viewer
-      .setPanorama(imageUrl, {
-        transition: false,
-
-        /*
-         * Apply the saved pose as part of the panorama change
-         * instead of restoring it afterward.
-         */
-        position: {
-          yaw: preservedPose.yaw,
-          pitch: preservedPose.pitch,
-        },
-
-        zoom: preservedPose.zoom,
-
-        /*
-         * The component renders its own loading status.
-         */
-        showLoader: false,
-      })
-      .then(() => {
-        /*
-         * A newer request has replaced this panorama request.
-         *
-         * The older completion must not update refs or React state.
-         */
-        if (requestNumber !== requestNumberRef.current || !mountedRef.current) {
-          console.debug("Superseded panorama request completed.", {
-            imageUrl,
-            requestNumber,
-            currentRequestNumber: requestNumberRef.current,
-            durationMs: Math.round(performance.now() - startedAt),
-          });
-
-          return;
-        }
-
-        currentImageUrlRef.current = imageUrl;
-        panoramaChangingRef.current = false;
-
-        console.debug("Panorama change completed.", {
-          imageUrl,
-          requestNumber,
-          durationMs: Math.round(performance.now() - startedAt),
-        });
-
-        setPanoramaLoading(false);
-        setLoadError(null);
-      })
-      .catch((reason: unknown) => {
-        /*
-         * Photo Sphere Viewer can reject an earlier operation when
-         * a newer panorama replaces it.
-         *
-         * This is an expected superseded request, not an error that
-         * should be displayed to the user.
-         */
-        if (requestNumber !== requestNumberRef.current || !mountedRef.current) {
-          console.debug("Superseded panorama request ended.", {
-            imageUrl,
-            requestNumber,
-            currentRequestNumber: requestNumberRef.current,
-            durationMs: Math.round(performance.now() - startedAt),
-            reason,
-          });
-
-          return;
-        }
-
-        panoramaChangingRef.current = false;
-
-        const message = getLoadErrorMessage(reason, imageUrl);
-
-        console.error("Current panorama failed to load.", {
-          imageUrl,
-          requestNumber,
-          durationMs: Math.round(performance.now() - startedAt),
-          reason,
-        });
-
-        setPanoramaLoading(false);
-        setLoadError(message);
-      });
-  }, [imageUrl]);
+    void processDesiredPanorama(viewer);
+  }, [imageUrl, processDesiredPanorama]);
 
   return (
     <section className="viewer-shell">
