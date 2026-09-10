@@ -6,7 +6,7 @@
   --color-primary-contrast: #ffffff;
 
   --color-background: #ffffff;
-  --color-surface: #ebebeb;
+  --color-surface: #ffffff;
   --color-surface-raised: #0a2d4e;
 
   --color-text: #000000;
@@ -39,5 +39,5 @@
   /*
    * Shadows
    */
-  --shadow-panel: 0 18px 50px rgba(0, 0, 0, 0.014);
+  --shadow-panel: 0 8px 10px rgba(0, 0, 0, 0.116);
 }
