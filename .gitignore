@@ -25,3 +25,4 @@ dist-ssr
 
 .env*
 source-panoramas
+generated-panoramas
