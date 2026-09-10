@@ -13,6 +13,8 @@ import { buildCaptureSessions } from "./services/frameIndex";
 import { resolveFrameUrl } from "./services/manifest";
 
 export default function App() {
+  console.log("TEST 9/10");
+
   const { manifest, loading, error } = useManifest();
 
   const [requestedSessionIndex, setRequestedSessionIndex] = useState(0);
@@ -20,8 +22,6 @@ export default function App() {
   const [requestedLocationId, setRequestedLocationId] = useState<string | null>(
     null,
   );
-
-  console.log("TEST 9/10");
 
   /*
    * Build one timeline position per capture day.
