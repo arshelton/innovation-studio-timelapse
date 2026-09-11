@@ -116,6 +116,7 @@ input:focus-visible {
 .location-tab:not(:disabled):hover,
 .secondary-button:hover {
   background: var(--color-surface-raised);
+  color: var(--color-surface);
 }
 
 .location-tab:not(:disabled):active,

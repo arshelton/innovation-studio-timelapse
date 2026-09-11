@@ -292,13 +292,11 @@ export default function App() {
       <div className="application-shell">
         <header className="application-header">
           <div>
-            <p className="header-eyebrow">Research image viewer</p>
-
             <h1>360 Timelapse Viewer</h1>
 
             <p className="header-description">
               {manifest.frames.length} images across {captureSessions.length}{" "}
-              capture sessions and {manifest.locations.length} locations
+              days and {manifest.locations.length} locations
             </p>
           </div>
         </header>
